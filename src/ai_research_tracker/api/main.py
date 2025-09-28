@@ -8,7 +8,7 @@ from .database import supabase
 from .models import Article, ArticleChunk, SearchRequest, SearchResult
 
 app = FastAPI(
-    title="NeuroAI Research Tracker API",
+    title="SUB-AI Research Tracker API",
     description="Track and analyse NeuroAI research papers",
     version="0.1.0"
 )
@@ -29,7 +29,7 @@ client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 async def root():
     """API root endpoint"""
     return {
-        "message": "AI Research Tracker API",
+        "message": "SUB-AI Research Tracker API",
         "version": "0.1.0",
         "endpoints": {
             "articles": "/articles",

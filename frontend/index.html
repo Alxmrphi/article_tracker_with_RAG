@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Research Tracker</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 20px;
+        }
+
+        h1 {
+            grid-column: 1 / -1;
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .papers-section {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .keywords-section {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            height: fit-content;
+        }
+
+        h2 {
+            color: #555;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead {
+            background-color: #f8f9fa;
+        }
+
+        th {
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #666;
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        tbody tr:hover {
+            background-color: #f8f9fa;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: 500;
+        }
+
+        .status-metadata {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+
+        .status-processed {
+            background-color: #d4edda;
+            color: #155724;
+        }
+
+        .status-failed {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+
+        .btn {
+            padding: 6px 14px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background-color: #0056b3;
+        }
+
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background-color: #545b62;
+        }
+
+        .btn-danger {
+            background-color: #dc3545;
+            color: white;
+            padding: 4px 8px;
+            font-size: 0.8em;
+        }
+
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+
+        .keyword-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            margin-bottom: 8px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+
+        .keyword-list {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 15px;
+        }
+
+        .add-keyword-form {
+            display: flex;
+            gap: 8px;
+        }
+
+        .add-keyword-form input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+
+        .title-cell {
+            max-width: 400px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .title-cell:hover {
+            white-space: normal;
+            overflow: visible;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AI Research Tracker</h1>
+        
+        <div class="papers-section">
+            <h2>Tracked Papers</h2>
+            <div id="papers-error" class="error" style="display: none;"></div>
+            <div id="papers-loading" class="loading">Loading papers...</div>
+            <table id="papers-table" style="display: none;">
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>First Author</th>
+                        <th>Year</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="papers-body">
+                </tbody>
+            </table>
+        </div>
+
+        <div class="keywords-section">
+            <h2>Tracked Keywords</h2>
+            <div id="keywords-error" class="error" style="display: none;"></div>
+            <div id="keywords-loading" class="loading">Loading...</div>
+            <div id="keywords-list" class="keyword-list" style="display: none;">
+            </div>
+            <div class="add-keyword-form">
+                <input type="text" id="new-keyword" placeholder="Add keyword...">
+                <button class="btn btn-primary" onclick="addKeyword()">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        // Load papers on page load
+        async function loadPapers() {
+            try {
+                const response = await fetch(`${API_BASE}/articles`);
+                if (!response.ok) throw new Error('Failed to fetch papers');
+                
+                const papers = await response.json();
+                displayPapers(papers);
+            } catch (error) {
+                document.getElementById('papers-loading').style.display = 'none';
+                document.getElementById('papers-error').textContent = `Error loading papers: ${error.message}`;
+                document.getElementById('papers-error').style.display = 'block';
+            }
+        }
+
+        function displayPapers(papers) {
+            document.getElementById('papers-loading').style.display = 'none';
+            document.getElementById('papers-table').style.display = 'table';
+            
+            const tbody = document.getElementById('papers-body');
+            tbody.innerHTML = '';
+
+            if (papers.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #666;">No papers tracked yet</td></tr>';
+                return;
+            }
+
+            papers.forEach(paper => {
+                const row = document.createElement('tr');
+                
+                const firstAuthor = paper.authors && paper.authors.length > 0 
+                    ? paper.authors[0] 
+                    : 'Unknown';
+                
+                const year = paper.published_date 
+                    ? new Date(paper.published_date).getFullYear() 
+                    : 'N/A';
+                
+                const statusClass = paper.processing_status === 'fully_processed' 
+                    ? 'status-processed' 
+                    : paper.processing_status === 'failed'
+                    ? 'status-failed'
+                    : 'status-metadata';
+                
+                const statusText = paper.processing_status === 'metadata_only' 
+                    ? 'Metadata Only' 
+                    : paper.processing_status === 'fully_processed'
+                    ? 'Processed'
+                    : 'Failed';
+                
+                const actionButton = paper.processing_status === 'metadata_only'
+                    ? `<button class="btn btn-primary" onclick="processPaper('${paper.id}')">Process Paper</button>`
+                    : paper.processing_status === 'fully_processed'
+                    ? `<button class="btn btn-secondary" onclick="viewChunks('${paper.id}')">View Chunks</button>`
+                    : '<span style="color: #666;">—</span>';
+                
+                row.innerHTML = `
+                    <td class="title-cell" title="${paper.title}">${paper.title}</td>
+                    <td>${firstAuthor}</td>
+                    <td>${year}</td>
+                    <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                    <td>${actionButton}</td>
+                `;
+                
+                tbody.appendChild(row);
+            });
+        }
+
+        // Load keywords on page load
+        async function loadKeywords() {
+            try {
+                // TODO: Replace with actual endpoint when you create it
+                // For now, this is a placeholder
+                const response = await fetch(`${API_BASE}/keywords`);
+                if (!response.ok) throw new Error('Failed to fetch keywords');
+                
+                const keywords = await response.json();
+                displayKeywords(keywords);
+            } catch (error) {
+                document.getElementById('keywords-loading').style.display = 'none';
+                // For now, just show empty state instead of error
+                displayKeywords([]);
+            }
+        }
+
+        function displayKeywords(keywords) {
+            document.getElementById('keywords-loading').style.display = 'none';
+            document.getElementById('keywords-list').style.display = 'block';
+            
+            const list = document.getElementById('keywords-list');
+            list.innerHTML = '';
+
+            if (keywords.length === 0) {
+                list.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">No keywords tracked yet</div>';
+                return;
+            }
+
+            keywords.forEach(keyword => {
+                const item = document.createElement('div');
+                item.className = 'keyword-item';
+                item.innerHTML = `
+                    <span>${keyword.keyword}</span>
+                    <button class="btn btn-danger" onclick="removeKeyword('${keyword.id}')">✕</button>
+                `;
+                list.appendChild(item);
+            });
+        }
+
+        async function processPaper(paperId) {
+            if (!confirm('Process this paper? This will download and analyze the full PDF.')) {
+                return;
+            }
+
+            try {
+                // TODO: Create this endpoint in your FastAPI app
+                const response = await fetch(`${API_BASE}/articles/${paperId}/process`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) throw new Error('Failed to process paper');
+                
+                alert('Paper processing started! Refresh to see updated status.');
+                loadPapers();
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        async function viewChunks(paperId) {
+            try {
+                const response = await fetch(`${API_BASE}/articles/${paperId}/chunks`);
+                if (!response.ok) throw new Error('Failed to fetch chunks');
+                
+                const chunks = await response.json();
+                
+                // Simple display - you can make this fancier later
+                const chunkText = chunks.map((c, i) => 
+                    `Chunk ${i + 1}:\n${c.chunk_text}\n`
+                ).join('\n---\n\n');
+                
+                // Open in new window or could make a modal
+                const newWindow = window.open('', '_blank');
+                newWindow.document.write(`
+                    <html>
+                        <head><title>Paper Chunks</title></head>
+                        <body style="padding: 20px; font-family: monospace; white-space: pre-wrap;">
+                            ${chunkText}
+                        </body>
+                    </html>
+                `);
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        async function addKeyword() {
+            const input = document.getElementById('new-keyword');
+            const keyword = input.value.trim();
+            
+            if (!keyword) {
+                alert('Please enter a keyword');
+                return;
+            }
+
+            try {
+                // TODO: Create this endpoint in your FastAPI app
+                const response = await fetch(`${API_BASE}/keywords`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ keyword })
+                });
+                
+                if (!response.ok) throw new Error('Failed to add keyword');
+                
+                input.value = '';
+                loadKeywords();
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        async function removeKeyword(keywordId) {
+            if (!confirm('Remove this keyword?')) {
+                return;
+            }
+
+            try {
+                // TODO: Create this endpoint in your FastAPI app
+                const response = await fetch(`${API_BASE}/keywords/${keywordId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) throw new Error('Failed to remove keyword');
+                
+                loadKeywords();
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        // Load data when page loads
+        window.onload = () => {
+            loadPapers();
+            loadKeywords();
+        };
+    </script>
+</body>
+</html>

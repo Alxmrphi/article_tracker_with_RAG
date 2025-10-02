@@ -1,8 +1,15 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
-import os
 from openai import OpenAI
+from pydantic import BaseModel
+from datetime import datetime
+
+import re
+import os
+import uuid
+import requests
+from io import BytesIO
 
 from .database import supabase
 from .models import Article, ArticleChunk, SearchRequest, SearchResult
@@ -13,6 +20,7 @@ app = FastAPI(
     version="0.1.0"
 )
 
+
 # CORS middleware for frontend access
 app.add_middleware(
     CORSMiddleware,
@@ -21,6 +29,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def clean_text(text: str) -> str:
+    """Remove null bytes and control characters from text"""
+    # Remove null bytes
+    text = text.replace('\x00', '')
+    
+    # Remove other control characters except newlines and tabs
+    text = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]', '', text)
+    
+    # Normalize whitespace
+    text = re.sub(r'\s+', ' ', text)
+    
+    return text.strip()
+
+def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[str]:
+    """Split text into overlapping chunks"""
+    text = clean_text(text)
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + chunk_size, len(text))
+        chunks.append(text[start:end])
+        start += chunk_size - overlap
+    return chunks
 
 # OpenAI client
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
@@ -105,6 +137,115 @@ async def get_article_chunks(article_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/articles/{article_id}/process")
+async def process_article(article_id: str, background_tasks: BackgroundTasks):
+    """
+    Trigger full processing of a paper (download PDF, extract text, generate embeddings)
+    Runs in background to avoid timeout
+    """
+    try:
+        # First check if article exists and needs processing
+        result = supabase.table('articles').select('*').eq('id', article_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Article not found")
+        
+        article = result.data[0]
+        
+        if article['processing_status'] == 'fully_processed':
+            raise HTTPException(status_code=400, detail="Article already fully processed")
+        
+        # Add processing task to background
+        background_tasks.add_task(process_article_background, article_id, article)
+        
+        return {
+            "message": "Processing started",
+            "article_id": article_id,
+            "status": "processing"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start processing: {str(e)}")
+
+async def process_article_background(article_id: str, article: dict):
+    """
+    Background task to fully process an article
+    This is the function that does the actual work
+    """
+    try:
+        import PyPDF2
+    except ImportError:
+        import pypdf as PyPDF2  # Handle different package name
+    
+    try:
+        # Update status to processing
+        supabase.table('articles').update({
+            'processing_status': 'processing'
+        }).eq('id', article_id).execute()
+        
+        # Step 1: Download PDF
+        pdf_url = article['pdf_url']
+        response = requests.get(pdf_url, timeout=30)
+        response.raise_for_status()
+        
+        # Step 2: Extract text from PDF
+        pdf_file = BytesIO(response.content)
+        pdf_reader = PyPDF2.PdfReader(pdf_file)
+        
+        full_text = ""
+        for page in pdf_reader.pages:
+            text = page.extract_text()
+            if text:
+                full_text += text + "\n"
+        
+        if not full_text.strip():
+            raise Exception("No text extracted from PDF")
+        
+        # Step 3: Clean text
+        full_text = clean_text(full_text)
+        
+        # Step 4: Chunk text (1000 chars with 200 char overlap)
+        chunks = chunk_text(full_text, chunk_size=1000, overlap=200)
+        
+        # Step 5: Generate embeddings for each chunk
+        client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        
+        # Step 6: Insert chunks into database
+        for idx, chunk in enumerate(chunks):
+            # Generate embedding
+            embedding_response = client.embeddings.create(
+                input=chunk,
+                model="text-embedding-ada-002"
+            )
+            embedding = embedding_response.data[0].embedding
+            
+            # Insert chunk
+            supabase.table('article_chunks').insert({
+                'id': str(uuid.uuid4()),
+                'article_id': article_id,
+                'chunk_text': chunk,
+                'chunk_index': idx,
+                'embedding': embedding,
+                'created_at': datetime.utcnow().isoformat()
+            }).execute()
+        
+        # Step 7: Update article status to fully_processed
+        supabase.table('articles').update({
+            'processing_status': 'fully_processed'
+        }).eq('id', article_id).execute()
+        
+        print(f"Successfully processed article {article_id}: {len(chunks)} chunks created")
+    
+    except Exception as e:
+        # Update status to failed
+        supabase.table('articles').update({
+            'processing_status': 'failed'
+        }).eq('id', article_id).execute()
+        
+        print(f"Failed to process article {article_id}: {str(e)}")
+
 @app.post("/search", response_model=List[SearchResult])
 async def semantic_search(request: SearchRequest):
     """Search papers semantically using embeddings"""
@@ -151,3 +292,162 @@ async def get_stats():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+# ==========================================
+# KEYWORD ENDPOINTS
+# ==========================================
+
+@app.get("/keywords")
+async def get_keywords():
+    """Get all tracked keywords"""
+    try:
+        response = supabase.table('tracked_keywords').select('*').order('created_at', desc=True).execute()
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch keywords: {str(e)}")
+
+
+@app.post("/keywords")
+async def add_keyword(keyword_data: dict):
+    """Add a new keyword to track (generates embedding automatically)"""
+    try:
+        keyword = keyword_data.get('keyword', '').strip().lower()
+        if not keyword:
+            raise HTTPException(status_code=400, detail="Keyword cannot be empty")
+        
+        # Generate embedding
+        client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        response = client.embeddings.create(
+            input=keyword,
+            model="text-embedding-ada-002"
+        )
+        embedding = response.data[0].embedding
+        
+        # Insert into database
+        result = supabase.table('tracked_keywords').insert({
+            'id': str(uuid.uuid4()),
+            'keyword': keyword,
+            'embedding': embedding,
+            'active': True,
+            'created_at': datetime.utcnow().isoformat(),
+            'last_checked': None
+        }).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=500, detail="Failed to insert keyword")
+        
+        return result.data[0]
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add keyword: {str(e)}")
+
+
+@app.delete("/keywords/{keyword_id}")
+async def delete_keyword(keyword_id: str):
+    """Delete a tracked keyword"""
+    try:
+        result = supabase.table('tracked_keywords').delete().eq('id', keyword_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Keyword not found")
+        
+        return {"message": "Keyword deleted successfully"}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete keyword: {str(e)}")
+
+
+# ==========================================
+# PAPER PROCESSING ENDPOINT
+# ==========================================
+
+@app.post("/articles/{article_id}/process")
+async def process_article(article_id: str, background_tasks: BackgroundTasks):
+    """Trigger full processing of a paper (download PDF, extract text, generate embeddings)"""
+    try:
+        # Check if article exists and needs processing
+        result = supabase.table('articles').select('*').eq('id', article_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Article not found")
+        
+        article = result.data[0]
+        
+        if article['processing_status'] == 'fully_processed':
+            raise HTTPException(status_code=400, detail="Article already fully processed")
+        
+        # Add processing task to background
+        background_tasks.add_task(process_article_background, article_id, article)
+        
+        return {
+            "message": "Processing started",
+            "article_id": article_id,
+            "status": "processing"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start processing: {str(e)}")
+    """Delete a tracked keyword"""
+    try:
+        result = supabase.table('tracked_keywords').delete().eq('id', keyword_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Keyword not found")
+        
+        return {"message": "Keyword deleted successfully"}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete keyword: {str(e)}")
+
+
+
+    """
+    Split text into overlapping chunks
+    
+    Args:
+        text: Text to chunk
+        chunk_size: Maximum size of each chunk in characters
+        overlap: Number of characters to overlap between chunks
+    
+    Returns:
+        List of text chunks
+    """
+    chunks = []
+    start = 0
+    text_length = len(text)
+    
+    while start < text_length:
+        end = start + chunk_size
+        
+        # If this is not the last chunk, try to break at a sentence or word boundary
+        if end < text_length:
+            # Look for sentence boundary (. ! ?)
+            for i in range(end, max(start + chunk_size - 100, start), -1):
+                if text[i] in '.!?':
+                    end = i + 1
+                    break
+            else:
+                # If no sentence boundary, look for word boundary
+                for i in range(end, max(start + chunk_size - 50, start), -1):
+                    if text[i].isspace():
+                        end = i
+                        break
+        
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        
+        # Move start position (with overlap)
+        start = end - overlap
+        
+        # Ensure we make progress
+        if start <= chunks[-1] if chunks else 0:
+            start = end
+    
+    return chunks

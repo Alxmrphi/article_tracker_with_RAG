@@ -29,3 +29,13 @@ class SearchResult(BaseModel):
     article: Article
     similarity_score: float
     matching_chunk: str
+
+class KeywordCreate(BaseModel):
+    keyword: str
+
+class KeywordResponse(BaseModel):
+    id: str
+    keyword: str
+    active: bool
+    created_at: datetime
+    last_checked: Optional[datetime]

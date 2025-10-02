@@ -285,11 +285,19 @@
                     ? 'Processed'
                     : 'Failed';
                 
-                const actionButton = paper.processing_status === 'metadata_only'
-                    ? `<button class="btn btn-primary" onclick="processPaper('${paper.id}')">Process Paper</button>`
-                    : paper.processing_status === 'fully_processed'
-                    ? `<button class="btn btn-secondary" onclick="viewChunks('${paper.id}')">View Chunks</button>`
-                    : '<span style="color: #666;">—</span>';
+                let actionButton = '';
+                if (paper.processing_status === 'metadata_only') {
+                    actionButton = `<button class="btn btn-primary" onclick="processPaper('${paper.id}')">Process Paper</button>`;
+                } else if (paper.processing_status === 'fully_processed') {
+                    actionButton = `
+                        <button class="btn btn-secondary" onclick="viewChunks('${paper.id}')">View Chunks</button>
+                        <button class="btn btn-danger" onclick="removeChunks('${paper.id}')" style="margin-left: 8px;">Remove Chunks</button>
+                    `;
+                } else if (paper.processing_status === 'processing') {
+                    actionButton = '<span style="color: #666;">Processing...</span>';
+                } else {
+                    actionButton = '<span style="color: #666;">—</span>';
+                }
                 
                 row.innerHTML = `
                     <td class="title-cell" title="${paper.title}">${paper.title}</td>
@@ -385,6 +393,25 @@
                         </body>
                     </html>
                 `);
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        async function removeChunks(paperId) {
+            if (!confirm('Remove all chunks for this paper? This will reset it to metadata-only status.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/articles/${paperId}/chunks`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) throw new Error('Failed to remove chunks');
+                
+                alert('Chunks removed successfully! Paper reset to metadata-only.');
+                loadPapers();
             } catch (error) {
                 alert(`Error: ${error.message}`);
             }

@@ -365,6 +365,31 @@ async def delete_keyword(keyword_id: str):
 # PAPER PROCESSING ENDPOINT
 # ==========================================
 
+@app.delete("/articles/{article_id}/chunks")
+async def delete_article_chunks(article_id: str):
+    """Delete all chunks for an article and reset status to metadata_only"""
+    try:
+        # Delete all chunks for this article
+        supabase.table('article_chunks').delete().eq('article_id', article_id).execute()
+        
+        # Reset article status to metadata_only
+        result = supabase.table('articles').update({
+            'processing_status': 'metadata_only'
+        }).eq('id', article_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Article not found")
+        
+        return {
+            "message": "Chunks deleted and article status reset",
+            "article_id": article_id
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete chunks: {str(e)}")
+
 @app.post("/articles/{article_id}/process")
 async def process_article(article_id: str, background_tasks: BackgroundTasks):
     """Trigger full processing of a paper (download PDF, extract text, generate embeddings)"""

@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Research Tracker</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 30px;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: white;
+            border-radius: 12px;
+            padding: 25px 30px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            color: #667eea;
+            font-size: 1.8em;
+            font-weight: 600;
+        }
+
+        .stats {
+            display: flex;
+            gap: 30px;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .stat-number {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-label {
+            font-size: 0.85em;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 25px;
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .card h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.1em;
+            font-weight: 600;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .papers-section {
+            min-height: 600px;
+        }
+
+        /* Card-based paper layout instead of table */
+        .papers-grid {
+            display: grid;
+            gap: 15px;
+        }
+
+        .paper-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            border-left: 4px solid #667eea;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .paper-card:hover {
+            transform: translateX(5px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .paper-title {
+            font-size: 1.05em;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+            line-height: 1.4;
+        }
+
+        .paper-meta {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 12px;
+            font-size: 0.85em;
+            color: #666;
+        }
+
+        .paper-meta span {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .paper-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #dee2e6;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.75em;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-metadata {
+            background-color: #fef3c7;
+            color: #92400e;
+        }
+
+        .status-processed {
+            background-color: #d1fae5;
+            color: #065f46;
+        }
+
+        .status-processing {
+            background-color: #dbeafe;
+            color: #1e40af;
+        }
+
+        .status-failed {
+            background-color: #fee2e2;
+            color: #991b1b;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85em;
+            font-weight: 500;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background-color: #545b62;
+        }
+
+        .btn-danger {
+            background-color: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background-color: #dc2626;
+        }
+
+        .btn-small {
+            padding: 5px 10px;
+            font-size: 0.75em;
+        }
+
+        .keyword-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .keyword-tag {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 15px;
+            background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+            border-radius: 8px;
+            border: 1px solid #667eea30;
+            transition: all 0.2s;
+        }
+
+        .keyword-tag:hover {
+            border-color: #667eea;
+            background: linear-gradient(135deg, #667eea25 0%, #764ba225 100%);
+        }
+
+        .keyword-text {
+            font-weight: 500;
+            color: #333;
+        }
+
+        .add-keyword-section {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 2px solid #f0f0f0;
+        }
+
+        .add-keyword-form {
+            display: flex;
+            gap: 10px;
+        }
+
+        .add-keyword-form input {
+            flex: 1;
+            padding: 10px 15px;
+            border: 2px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 0.9em;
+            transition: border-color 0.2s;
+        }
+
+        .add-keyword-form input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .loading::after {
+            content: '...';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+
+        .error {
+            background-color: #fee2e2;
+            color: #991b1b;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #ef4444;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+
+        .empty-state-icon {
+            font-size: 3em;
+            margin-bottom: 15px;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #667eea;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #764ba2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🧠 AI Research Tracker</h1>
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-number" id="total-papers">0</div>
+                    <div class="stat-label">Papers</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="processed-papers">0</div>
+                    <div class="stat-label">Processed</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="total-keywords">0</div>
+                    <div class="stat-label">Keywords</div>
+                </div>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="sidebar">
+                <div class="card">
+                    <h2>🏷️ Tracked Keywords</h2>
+                    <div id="keywords-error" class="error" style="display: none;"></div>
+                    <div id="keywords-loading" class="loading">Loading</div>
+                    <div id="keywords-list" class="keyword-list" style="display: none;"></div>
+                    <div class="add-keyword-section">
+                        <div class="add-keyword-form">
+                            <input type="text" id="new-keyword" placeholder="Add keyword...">
+                            <button class="btn btn-primary" onclick="addKeyword()">+</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="papers-section card">
+                <h2>📚 Research Papers</h2>
+                <div id="papers-error" class="error" style="display: none;"></div>
+                <div id="papers-loading" class="loading">Loading papers</div>
+                <div id="papers-grid" class="papers-grid" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        async function loadPapers() {
+            try {
+                const response = await fetch(`${API_BASE}/articles`);
+                if (!response.ok) throw new Error('Failed to fetch papers');
+                
+                const papers = await response.json();
+                displayPapers(papers);
+                updateStats(papers);
+            } catch (error) {
+                document.getElementById('papers-loading').style.display = 'none';
+                document.getElementById('papers-error').textContent = `Error loading papers: ${error.message}`;
+                document.getElementById('papers-error').style.display = 'block';
+            }
+        }
+
+        function displayPapers(papers) {
+            document.getElementById('papers-loading').style.display = 'none';
+            document.getElementById('papers-grid').style.display = 'grid';
+            
+            const grid = document.getElementById('papers-grid');
+            grid.innerHTML = '';
+
+            if (papers.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><div>No papers tracked yet</div></div>';
+                return;
+            }
+
+            papers.forEach(paper => {
+                const card = document.createElement('div');
+                card.className = 'paper-card';
+                
+                const firstAuthor = paper.authors && paper.authors.length > 0 
+                    ? paper.authors[0] 
+                    : 'Unknown';
+                
+                const year = paper.published_date 
+                    ? new Date(paper.published_date).getFullYear() 
+                    : 'N/A';
+                
+                const statusClass = paper.processing_status === 'fully_processed' 
+                    ? 'status-processed' 
+                    : paper.processing_status === 'failed'
+                    ? 'status-failed'
+                    : paper.processing_status === 'processing'
+                    ? 'status-processing'
+                    : 'status-metadata';
+                
+                const statusText = paper.processing_status === 'metadata_only' 
+                    ? 'Metadata' 
+                    : paper.processing_status === 'fully_processed'
+                    ? 'Processed'
+                    : paper.processing_status === 'processing'
+                    ? 'Processing'
+                    : 'Failed';
+                
+                let actionButtons = '';
+                if (paper.processing_status === 'metadata_only') {
+                    actionButtons = `<button class="btn btn-primary" onclick="processPaper('${paper.id}')">Process Paper</button>`;
+                } else if (paper.processing_status === 'fully_processed') {
+                    actionButtons = `
+                        <button class="btn btn-secondary" onclick="viewChunks('${paper.id}')">View Chunks</button>
+                        <button class="btn btn-danger btn-small" onclick="removeChunks('${paper.id}')">Remove Chunks</button>
+                    `;
+                } else if (paper.processing_status === 'processing') {
+                    actionButtons = '<span style="color: #1e40af; font-weight: 500;">⏳ Processing...</span>';
+                }
+                
+                card.innerHTML = `
+                    <div class="paper-title">${paper.title}</div>
+                    <div class="paper-meta">
+                        <span>👤 ${firstAuthor}</span>
+                        <span>📅 ${year}</span>
+                        <span class="status-badge ${statusClass}">${statusText}</span>
+                    </div>
+                    <div class="paper-actions">
+                        ${actionButtons}
+                    </div>
+                `;
+                
+                grid.appendChild(card);
+            });
+        }
+
+        function updateStats(papers) {
+            document.getElementById('total-papers').textContent = papers.length;
+            const processed = papers.filter(p => p.processing_status === 'fully_processed').length;
+            document.getElementById('processed-papers').textContent = processed;
+        }
+
+        async function loadKeywords() {
+            try {
+                const response = await fetch(`${API_BASE}/keywords`);
+                if (!response.ok) throw new Error('Failed to fetch keywords');
+                
+                const keywords = await response.json();
+                displayKeywords(keywords);
+                document.getElementById('total-keywords').textContent = keywords.length;
+            } catch (error) {
+                document.getElementById('keywords-loading').style.display = 'none';
+                displayKeywords([]);
+                document.getElementById('total-keywords').textContent = '0';
+            }
+        }
+
+        function displayKeywords(keywords) {
+            document.getElementById('keywords-loading').style.display = 'none';
+            document.getElementById('keywords-list').style.display = 'flex';
+            
+            const list = document.getElementById('keywords-list');
+            list.innerHTML = '';
+
+            if (keywords.length === 0) {
+                list.innerHTML = '<div class="empty-state" style="padding: 20px;">No keywords yet</div>';
+                return;
+            }
+
+            keywords.forEach(keyword => {
+                const tag = document.createElement('div');
+                tag.className = 'keyword-tag';
+                tag.innerHTML = `
+                    <span class="keyword-text">${keyword.keyword}</span>
+                    <button class="btn btn-danger btn-small" onclick="removeKeyword('${keyword.id}')">✕</button>
+                `;
+                list.appendChild(tag);
+            });
+        }
+
+        async function processPaper(paperId) {
+            if (!confirm('Process this paper? This will download and analyze the full PDF.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/articles/${paperId}/process`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) throw new Error('Failed to process paper');
+                
+                alert('Paper processing started! Refresh to see updated status.');
+                loadPapers();
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        async function viewChunks(paperId) {
+            try {
+                const response = await fetch(`${API_BASE}/articles/${paperId}/chunks`);
+                if (!response.ok) throw new Error('Failed to fetch chunks');
+                
+                const chunks = await response.json();
+                
+                const chunkText = chunks.map((c, i) => 
+                    `Chunk ${i + 1}:\n${c.chunk_text}\n`
+                ).join('\n---\n\n');
+                
+                const newWindow = window.open('', '_blank');
+                newWindow.document.write(`
+                    <html>
+                        <head><title>Paper Chunks</title></head>
+                        <body style="padding: 20px; font-family: monospace; white-space: pre-wrap;">
+                            ${chunkText}
+                        </body>
+                    </html>
+                `);
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        async function removeChunks(paperId) {
+            if (!confirm('Remove all chunks for this paper? This will reset it to metadata-only status.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/articles/${paperId}/chunks`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) throw new Error('Failed to remove chunks');
+                
+                alert('Chunks removed successfully! Paper reset to metadata-only.');
+                loadPapers();
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        async function addKeyword() {
+            const input = document.getElementById('new-keyword');
+            const keyword = input.value.trim();
+            
+            if (!keyword) {
+                alert('Please enter a keyword');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/keywords`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ keyword })
+                });
+                
+                if (!response.ok) throw new Error('Failed to add keyword');
+                
+                input.value = '';
+                loadKeywords();
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        async function removeKeyword(keywordId) {
+            if (!confirm('Remove this keyword?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/keywords/${keywordId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) throw new Error('Failed to remove keyword');
+                
+                loadKeywords();
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        window.onload = () => {
+            loadPapers();
+            loadKeywords();
+        };
+    </script>
+</body>
+</html>

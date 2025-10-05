@@ -15,8 +15,8 @@ from .database import supabase
 from .models import Article, ArticleChunk, SearchRequest, SearchResult
 
 app = FastAPI(
-    title="SUB-AI Research Tracker API",
-    description="Track and analyse NeuroAI research papers",
+    title="Research Paper Tracker API",
+    description="Track and analyse research papers",
     version="0.1.0"
 )
 

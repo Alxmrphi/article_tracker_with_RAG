@@ -54,6 +54,7 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[st
         start += chunk_size - overlap
     return chunks
 
+# TODO: should have more optionality here to pick embedding model
 # OpenAI client
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 

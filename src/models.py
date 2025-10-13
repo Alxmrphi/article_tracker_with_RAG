@@ -12,7 +12,7 @@ class Article(BaseModel):
     categories: List[str]
     pdf_url: Optional[str] = None
     processing_status: str
-    created_at: datetime
+    created_at: datetime # Check if needed
 
 class ArticleChunk(BaseModel):
     id: str
@@ -31,9 +31,9 @@ class SearchResult(BaseModel):
     matching_chunk: str
 
 class KeywordCreate(BaseModel):
-    keyword: str
+    keyword: str # TODO: phrase, not keyword
 
-class KeywordResponse(BaseModel):
+class KeywordResponse(BaseModel): # Same here
     id: str
     keyword: str
     active: bool

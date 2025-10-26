@@ -12,19 +12,7 @@ import requests
 from io import BytesIO
 
 from .database import supabase
-from .models import Article, ArticleChunk, SearchRequest, SearchResult
-
-# Pydantic models for request validation
-class KeywordCreate(BaseModel):
-    """Model for creating new tracked keywords"""
-    keyword: str
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "keyword": "neural architecture search"
-            }
-        }
+from .models import Article, ArticleChunk, SearchRequest, SearchResult, KeywordCreate, KeywordResponse
 
 app = FastAPI(
     title="Research Paper Tracker API",
@@ -128,17 +116,107 @@ PDF_DOWNLOAD_TIMEOUT = 30
 # OpenAI client - initialized once for efficiency
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
+# ==========================================
+# UTILITY FUNCTIONS
+# ==========================================
+
+def validate_openai_client() -> bool:
+    """
+    Validate that OpenAI client is properly configured.
+    
+    Returns:
+        bool: True if client is ready, False otherwise
+    """
+    try:
+        api_key = os.getenv('OPENAI_API_KEY')
+        return api_key is not None and len(api_key) > 0
+    except Exception:
+        return False
+
+def get_embedding_for_text(text: str) -> List[float]:
+    """
+    Generate embedding for a given text using the configured model.
+    
+    Args:
+        text (str): Text to generate embedding for
+        
+    Returns:
+        List[float]: Embedding vector
+        
+    Raises:
+        Exception: If embedding generation fails
+    """
+    if not validate_openai_client():
+        raise Exception("OpenAI client not properly configured")
+        
+    response = client.embeddings.create(
+        input=text.strip(),
+        model=EMBEDDING_MODEL
+    )
+    return response.data[0].embedding
+
+def validate_article_id(article_id: str) -> None:
+    """
+    Validate article ID format.
+    
+    Args:
+        article_id (str): Article ID to validate
+        
+    Raises:
+        HTTPException: If article ID is invalid
+    """
+    if not article_id or not article_id.strip():
+        raise HTTPException(status_code=400, detail="Article ID cannot be empty")
+    
+    # Add more validation as needed (e.g., UUID format check)
+    if len(article_id.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Article ID too short")
+
+def validate_pagination_params(limit: int, offset: int) -> None:
+    """
+    Validate pagination parameters.
+    
+    Args:
+        limit (int): Maximum number of items to return
+        offset (int): Number of items to skip
+        
+    Raises:
+        HTTPException: If parameters are invalid
+    """
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+    
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="Offset must be non-negative")
+
+# ==========================================
+# API ENDPOINTS  
+# ==========================================
+
 @app.get("/")
 async def root():
-    """API root endpoint"""
+    """
+    API root endpoint with service information and available endpoints.
+    
+    Provides an overview of the API and links to key endpoints for
+    easy discovery and integration testing.
+    
+    Returns:
+        dict: Service metadata and endpoint directory
+    """
     return {
-        "message": "SUB-AI Research Tracker API",
+        "service": "Research Paper Tracker API",
         "version": "0.1.0",
+        "description": "Track and analyze research papers with semantic search capabilities",
         "endpoints": {
-            "articles": "/articles",
-            "search": "/search",
-            "health": "/health"
-        }
+            "health": "/health - API health check",
+            "articles": "/articles - List and manage research articles", 
+            "search": "/search - Semantic search across paper content",
+            "keywords": "/keywords - Manage tracked keywords",
+            "stats": "/stats - System statistics"
+        },
+        "documentation": "/docs",
+        "openapi_spec": "/openapi.json"
     }
 
 @app.get("/health")
@@ -201,11 +279,15 @@ async def get_articles(
         List[Article]: List of articles matching the criteria
         
     Raises:
+        HTTPException: 400 if pagination parameters are invalid
         HTTPException: 500 if database query fails
         
     Example:
         GET /articles?limit=10&offset=20&status=fully_processed
     """
+    # Validate input parameters
+    validate_pagination_params(limit, offset)
+    
     try:
         query = supabase.table('articles').select('*')
         
@@ -224,6 +306,8 @@ async def get_articles(
 @app.get("/articles/{article_id}", response_model=Article)
 async def get_article(article_id: str):
     """Get a specific article by ID"""
+    validate_article_id(article_id)
+    
     try:
         result = supabase.table('articles')\
             .select('*')\
@@ -365,11 +449,7 @@ async def process_article_background(article_id: str, article: dict):
             print(f"Processing chunk {chunk_index + 1}/{len(text_chunks)}")
             
             # Generate embedding for this chunk
-            embedding_response = embedding_client.embeddings.create(
-                input=chunk_text,
-                model=EMBEDDING_MODEL
-            )
-            chunk_embedding = embedding_response.data[0].embedding
+            chunk_embedding = get_embedding_for_text(chunk_text)
             
             # Store chunk with embedding in database
             supabase.table('article_chunks').insert({
@@ -429,11 +509,7 @@ async def semantic_search(request: SearchRequest):
     """
     try:
         # Convert search query to embedding vector
-        embedding_response = client.embeddings.create(
-            input=request.query,
-            model=EMBEDDING_MODEL
-        )
-        query_embedding = embedding_response.data[0].embedding
+        query_embedding = get_embedding_for_text(request.query)
         
         # Search using vector similarity
         # Note: This uses Supabase's vector search
@@ -452,21 +528,48 @@ async def semantic_search(request: SearchRequest):
 
 @app.get("/stats")
 async def get_stats():
-    """Get system statistics"""
+    """
+    Get comprehensive system statistics and processing status.
+    
+    Provides an overview of the system's current state including
+    article counts by processing status, total chunks processed,
+    and tracked keywords.
+    
+    Returns:
+        dict: System statistics including:
+            - Article counts by processing status
+            - Total text chunks processed  
+            - Tracked keywords count
+            - Processing success rate
+            
+    Raises:
+        HTTPException: 500 if database queries fail
+    """
     try:
+        # Get article statistics
         articles_result = supabase.table('articles').select('processing_status').execute()
         chunks_result = supabase.table('article_chunks').select('id', count='exact').execute()
+        keywords_result = supabase.table('tracked_keywords').select('id', count='exact').execute()
         
         articles = articles_result.data
         total_articles = len(articles)
-        processed = len([a for a in articles if a['processing_status'] == 'fully_processed'])
-        metadata_only = len([a for a in articles if a['processing_status'] == 'metadata_only'])
+        
+        # Count by processing status
+        status_counts = {}
+        for article in articles:
+            status = article['processing_status']
+            status_counts[status] = status_counts.get(status, 0) + 1
+        
+        processed_count = status_counts.get('fully_processed', 0)
+        success_rate = (processed_count / total_articles * 100) if total_articles > 0 else 0
         
         return {
             "total_articles": total_articles,
-            "fully_processed": processed,
-            "metadata_only": metadata_only,
-            "total_chunks": chunks_result.count if chunks_result.count else 0
+            "processing_status": status_counts,
+            "total_chunks": chunks_result.count if chunks_result.count else 0,
+            "tracked_keywords": keywords_result.count if keywords_result.count else 0,
+            "processing_success_rate": round(success_rate, 1),
+            "timestamp": datetime.utcnow().isoformat()
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -475,9 +578,20 @@ async def get_stats():
 # KEYWORD ENDPOINTS
 # ==========================================
 
-@app.get("/keywords")
+@app.get("/keywords", response_model=List[KeywordResponse])
 async def get_keywords():
-    """Get all tracked keywords"""
+    """
+    Retrieve all tracked keywords with their metadata.
+    
+    Returns a list of all keywords being tracked for research paper monitoring,
+    including their activation status and last check timestamps.
+    
+    Returns:
+        List[KeywordResponse]: List of tracked keywords with metadata
+        
+    Raises:
+        HTTPException: 500 if database query fails
+    """
     try:
         response = supabase.table('tracked_keywords').select('*').order('created_at', desc=True).execute()
         return response.data
@@ -485,27 +599,49 @@ async def get_keywords():
         raise HTTPException(status_code=500, detail=f"Failed to fetch keywords: {str(e)}")
 
 
-@app.post("/keywords")
-async def add_keyword(keyword_data: dict):
-    """Add a new keyword to track (generates embedding automatically)"""
+@app.post("/keywords", response_model=KeywordResponse)
+async def add_keyword(keyword_data: KeywordCreate):
+    """
+    Add a new keyword to track with automatic embedding generation.
+    
+    Creates a new tracked keyword and generates its embedding vector for
+    semantic similarity matching against research paper content.
+    
+    Args:
+        keyword_data (KeywordCreate): Contains the keyword/phrase to track
+        
+    Returns:
+        KeywordResponse: The created keyword with metadata
+        
+    Raises:
+        HTTPException: 400 if keyword is empty or already exists
+        HTTPException: 500 if embedding generation or database operation fails
+        
+    Example:
+        POST /keywords
+        {
+            "keyword": "transformer architecture"
+        }
+    """
     try:
-        keyword = keyword_data.get('keyword', '').strip().lower()
-        if not keyword:
+        keyword_text = keyword_data.keyword.strip().lower()
+        
+        if not keyword_text:
             raise HTTPException(status_code=400, detail="Keyword cannot be empty")
         
-        # Generate embedding
-        client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        response = client.embeddings.create(
-            input=keyword,
-            model="text-embedding-ada-002"
-        )
-        embedding = response.data[0].embedding
+        # Check if keyword already exists
+        existing = supabase.table('tracked_keywords').select('*').eq('keyword', keyword_text).execute()
+        if existing.data:
+            raise HTTPException(status_code=400, detail="Keyword already exists")
         
-        # Insert into database
+        # Generate embedding for the keyword using the utility function
+        keyword_embedding = get_embedding_for_text(keyword_text)
+        
+        # Insert into database with generated embedding
         result = supabase.table('tracked_keywords').insert({
             'id': str(uuid.uuid4()),
-            'keyword': keyword,
-            'embedding': embedding,
+            'keyword': keyword_text,
+            'embedding': keyword_embedding,
             'active': True,
             'created_at': datetime.utcnow().isoformat(),
             'last_checked': None
@@ -567,90 +703,3 @@ async def delete_article_chunks(article_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete chunks: {str(e)}")
-
-@app.post("/articles/{article_id}/process")
-async def process_article(article_id: str, background_tasks: BackgroundTasks):
-    """Trigger full processing of a paper (download PDF, extract text, generate embeddings)"""
-    try:
-        # Check if article exists and needs processing
-        result = supabase.table('articles').select('*').eq('id', article_id).execute()
-        
-        if not result.data:
-            raise HTTPException(status_code=404, detail="Article not found")
-        
-        article = result.data[0]
-        
-        if article['processing_status'] == 'fully_processed':
-            raise HTTPException(status_code=400, detail="Article already fully processed")
-        
-        # Add processing task to background
-        background_tasks.add_task(process_article_background, article_id, article)
-        
-        return {
-            "message": "Processing started",
-            "article_id": article_id,
-            "status": "processing"
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to start processing: {str(e)}")
-    """Delete a tracked keyword"""
-    try:
-        result = supabase.table('tracked_keywords').delete().eq('id', keyword_id).execute()
-        
-        if not result.data:
-            raise HTTPException(status_code=404, detail="Keyword not found")
-        
-        return {"message": "Keyword deleted successfully"}
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete keyword: {str(e)}")
-
-
-
-    """
-    Split text into overlapping chunks
-    
-    Args:
-        text: Text to chunk
-        chunk_size: Maximum size of each chunk in characters
-        overlap: Number of characters to overlap between chunks
-    
-    Returns:
-        List of text chunks
-    """
-    chunks = []
-    start = 0
-    text_length = len(text)
-    
-    while start < text_length:
-        end = start + chunk_size
-        
-        # If this is not the last chunk, try to break at a sentence or word boundary
-        if end < text_length:
-            # Look for sentence boundary (. ! ?)
-            for i in range(end, max(start + chunk_size - 100, start), -1):
-                if text[i] in '.!?':
-                    end = i + 1
-                    break
-            else:
-                # If no sentence boundary, look for word boundary
-                for i in range(end, max(start + chunk_size - 50, start), -1):
-                    if text[i].isspace():
-                        end = i
-                        break
-        
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        
-        # Move start position (with overlap)
-        start = end - overlap
-        
-        # Ensure we make progress
-        if start <= chunks[-1] if chunks else 0:
-            start = end
-    
-    return chunks

@@ -14,6 +14,18 @@ from io import BytesIO
 from .database import supabase
 from .models import Article, ArticleChunk, SearchRequest, SearchResult
 
+# Pydantic models for request validation
+class KeywordCreate(BaseModel):
+    """Model for creating new tracked keywords"""
+    keyword: str
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "keyword": "neural architecture search"
+            }
+        }
+
 app = FastAPI(
     title="Research Paper Tracker API",
     description="Track and analyse research papers",
@@ -31,31 +43,89 @@ app.add_middleware(
 )
 
 def clean_text(text: str) -> str:
-    """Remove null bytes and control characters from text"""
-    # Remove null bytes
+    """
+    Remove null bytes and control characters from text to ensure database compatibility.
+    
+    This function is essential for PDF text extraction as PDFs often contain
+    binary characters that can cause database insertion errors.
+    
+    Args:
+        text (str): Raw text that may contain control characters
+        
+    Returns:
+        str: Cleaned text safe for database storage
+        
+    Example:
+        >>> clean_text("Hello\x00World\n\n\n")
+        "Hello World"
+    """
+    # Remove null bytes that cause database errors
     text = text.replace('\x00', '')
     
     # Remove other control characters except newlines and tabs
+    # Range covers C0 and C1 control characters
     text = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]', '', text)
     
-    # Normalize whitespace
+    # Normalize multiple whitespace characters to single spaces
     text = re.sub(r'\s+', ' ', text)
     
     return text.strip()
 
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[str]:
-    """Split text into overlapping chunks"""
-    text = clean_text(text)
+    """
+    Split text into overlapping chunks for embedding generation.
+    
+    Overlapping chunks ensure that concepts spanning chunk boundaries
+    are not lost during semantic search. This is crucial for maintaining
+    context in research papers.
+    
+    Args:
+        text (str): The text to be chunked
+        chunk_size (int): Maximum characters per chunk (default: 1000)
+        overlap (int): Characters to overlap between chunks (default: 200)
+        
+    Returns:
+        list[str]: List of text chunks with specified overlap
+        
+    Example:
+        >>> chunks = chunk_text("Long text here...", chunk_size=100, overlap=20)
+        >>> len(chunks[0])  # First chunk
+        100
+        >>> chunks[0][-20:] == chunks[1][:20]  # Overlap check
+        True
+    """
+    # Clean the text first to ensure consistent processing
+    cleaned_text = clean_text(text)
+    
+    if not cleaned_text:
+        return []
+        
     chunks = []
-    start = 0
-    while start < len(text):
-        end = min(start + chunk_size, len(text))
-        chunks.append(text[start:end])
-        start += chunk_size - overlap
+    start_position = 0
+    text_length = len(cleaned_text)
+    
+    while start_position < text_length:
+        end_position = min(start_position + chunk_size, text_length)
+        chunk = cleaned_text[start_position:end_position]
+        chunks.append(chunk)
+        
+        # Move start position forward, accounting for overlap
+        start_position += chunk_size - overlap
+        
+        # Prevent infinite loop if overlap >= chunk_size
+        if start_position <= start_position - (chunk_size - overlap):
+            break
+    
     return chunks
 
+# Constants for configuration
+DEFAULT_CHUNK_SIZE = 1000
+DEFAULT_CHUNK_OVERLAP = 200
+EMBEDDING_MODEL = "text-embedding-ada-002"
+PDF_DOWNLOAD_TIMEOUT = 30
+
 # TODO: should have more optionality here to pick embedding model
-# OpenAI client
+# OpenAI client - initialized once for efficiency
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 @app.get("/")
@@ -73,17 +143,42 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Check API and database health"""
+    """
+    Comprehensive health check for the API and its dependencies.
+    
+    This endpoint verifies that the API is running and can connect to
+    the Supabase database. Used by monitoring systems and load balancers
+    to determine service availability.
+    
+    Returns:
+        dict: Health status information including database connectivity
+              and article count for basic functionality verification
+              
+    Raises:
+        HTTPException: 503 (Service Unavailable) if database connection fails
+        
+    Example Response:
+        {
+            "status": "healthy",
+            "database": "connected", 
+            "articles_count": 42
+        }
+    """
     try:
-        # Test database connection
+        # Test database connection with a simple query
         result = supabase.table('articles').select("count").execute()
+        
         return {
             "status": "healthy",
             "database": "connected",
-            "articles_count": len(result.data)
+            "articles_count": len(result.data),
+            "timestamp": datetime.utcnow().isoformat()
         }
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Database connection failed: {str(e)}")
+        raise HTTPException(
+            status_code=503, 
+            detail=f"Database connection failed: {str(e)}"
+        )
 
 @app.get("/articles", response_model=List[Article])
 async def get_articles(
@@ -91,10 +186,30 @@ async def get_articles(
     offset: int = 0,
     status: Optional[str] = None
 ):
-    """Get list of articles with pagination"""
+    """
+    Retrieve articles with pagination and optional status filtering.
+    
+    This endpoint supports pagination to handle large datasets efficiently
+    and allows filtering by processing status to show articles in different states.
+    
+    Args:
+        limit (int): Maximum number of articles to return (default: 20, max recommended: 100)
+        offset (int): Number of articles to skip for pagination (default: 0)
+        status (Optional[str]): Filter by processing status (e.g., 'metadata_only', 'processing', 'fully_processed')
+        
+    Returns:
+        List[Article]: List of articles matching the criteria
+        
+    Raises:
+        HTTPException: 500 if database query fails
+        
+    Example:
+        GET /articles?limit=10&offset=20&status=fully_processed
+    """
     try:
         query = supabase.table('articles').select('*')
         
+        # Apply status filter if provided
         if status:
             query = query.eq('processing_status', status)
         
@@ -172,72 +287,106 @@ async def process_article(article_id: str, background_tasks: BackgroundTasks):
 
 async def process_article_background(article_id: str, article: dict):
     """
-    Background task to fully process an article
-    This is the function that does the actual work
+    Background task to fully process a research article.
+    
+    This function performs the complete pipeline for article processing:
+    1. Downloads the PDF from the provided URL
+    2. Extracts text content from all pages
+    3. Cleans and normalizes the text
+    4. Splits text into overlapping chunks
+    5. Generates embeddings for each chunk using OpenAI
+    6. Stores chunks and embeddings in the database
+    
+    The function handles errors gracefully and updates the article's
+    processing status throughout the pipeline.
+    
+    Args:
+        article_id (str): Unique identifier for the article
+        article (dict): Article metadata including pdf_url
+        
+    Side Effects:
+        - Updates article processing_status in database
+        - Creates article_chunks records with embeddings
+        - Logs progress and errors to console
+        
+    Note:
+        This function runs in the background to prevent API timeouts
+        for the PDF processing which can take 30+ seconds for large papers.
     """
+    # Import PDF processing library with fallback
     try:
         import PyPDF2
     except ImportError:
         import pypdf as PyPDF2  # Handle different package name
     
     try:
-        # Update status to processing
+        # Mark article as being processed
         supabase.table('articles').update({
             'processing_status': 'processing'
         }).eq('id', article_id).execute()
         
-        # Step 1: Download PDF
+        # Step 1: Download PDF with timeout to prevent hanging
         pdf_url = article['pdf_url']
-        response = requests.get(pdf_url, timeout=30)
+        print(f"Downloading PDF for article {article_id} from {pdf_url}")
+        
+        response = requests.get(pdf_url, timeout=PDF_DOWNLOAD_TIMEOUT)
         response.raise_for_status()
         
-        # Step 2: Extract text from PDF
+        # Step 2: Extract text from all pages of the PDF
         pdf_file = BytesIO(response.content)
         pdf_reader = PyPDF2.PdfReader(pdf_file)
         
-        full_text = ""
-        for page in pdf_reader.pages:
-            text = page.extract_text()
-            if text:
-                full_text += text + "\n"
+        extracted_text = ""
+        page_count = len(pdf_reader.pages)
+        print(f"Extracting text from {page_count} pages...")
         
-        if not full_text.strip():
-            raise Exception("No text extracted from PDF")
+        for page_num, page in enumerate(pdf_reader.pages, 1):
+            page_text = page.extract_text()
+            if page_text:
+                extracted_text += page_text + "\n"
+                
+        if not extracted_text.strip():
+            raise Exception("No text could be extracted from the PDF")
         
-        # Step 3: Clean text
-        full_text = clean_text(full_text)
+        print(f"Extracted {len(extracted_text)} characters of text")
         
-        # Step 4: Chunk text (1000 chars with 200 char overlap)
-        chunks = chunk_text(full_text, chunk_size=1000, overlap=200)
+        # Step 3: Clean and normalize the extracted text
+        cleaned_text = clean_text(extracted_text)
         
-        # Step 5: Generate embeddings for each chunk
-        client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        # Step 4: Split text into overlapping chunks for embedding
+        text_chunks = chunk_text(cleaned_text, chunk_size=DEFAULT_CHUNK_SIZE, overlap=DEFAULT_CHUNK_OVERLAP)
+        print(f"Created {len(text_chunks)} text chunks")
         
-        # Step 6: Insert chunks into database
-        for idx, chunk in enumerate(chunks):
-            # Generate embedding
-            embedding_response = client.embeddings.create(
-                input=chunk,
-                model="text-embedding-ada-002"
-            )
-            embedding = embedding_response.data[0].embedding
+        # Step 5: Generate embeddings for each chunk using OpenAI
+        embedding_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        
+        # Step 6: Process each chunk and store in database
+        for chunk_index, chunk_text in enumerate(text_chunks):
+            print(f"Processing chunk {chunk_index + 1}/{len(text_chunks)}")
             
-            # Insert chunk
+            # Generate embedding for this chunk
+            embedding_response = embedding_client.embeddings.create(
+                input=chunk_text,
+                model=EMBEDDING_MODEL
+            )
+            chunk_embedding = embedding_response.data[0].embedding
+            
+            # Store chunk with embedding in database
             supabase.table('article_chunks').insert({
                 'id': str(uuid.uuid4()),
                 'article_id': article_id,
-                'chunk_text': chunk,
-                'chunk_index': idx,
-                'embedding': embedding,
+                'chunk_text': chunk_text,
+                'chunk_index': chunk_index,
+                'embedding': chunk_embedding,
                 'created_at': datetime.utcnow().isoformat()
             }).execute()
         
-        # Step 7: Update article status to fully_processed
+        # Step 7: Mark article as fully processed
         supabase.table('articles').update({
             'processing_status': 'fully_processed'
         }).eq('id', article_id).execute()
         
-        print(f"Successfully processed article {article_id}: {len(chunks)} chunks created")
+        print(f"Successfully processed article {article_id}: {len(text_chunks)} chunks created")
     
     except Exception as e:
         # Update status to failed
@@ -249,14 +398,42 @@ async def process_article_background(article_id: str, article: dict):
 
 @app.post("/search", response_model=List[SearchResult])
 async def semantic_search(request: SearchRequest):
-    """Search papers semantically using embeddings"""
+    """
+    Perform semantic search across research paper chunks using vector embeddings.
+    
+    This endpoint converts the search query to an embedding and finds the most
+    semantically similar chunks from processed research papers. The search
+    considers conceptual similarity rather than just keyword matching.
+    
+    Args:
+        request (SearchRequest): Contains query string and optional parameters
+            - query: The search text to find similar content for
+            - limit: Maximum number of results to return (default varies by model)
+            
+    Returns:
+        List[SearchResult]: Ranked list of matching paper chunks with metadata
+        
+    Raises:
+        HTTPException: 500 if embedding generation or database query fails
+        
+    Example:
+        POST /search
+        {
+            "query": "neural network architecture for natural language processing",
+            "limit": 10
+        }
+        
+    Note:
+        Requires articles to be fully processed (embeddings generated) to appear in results.
+        Search quality depends on the embedding model (currently text-embedding-ada-002).
+    """
     try:
-        # Generate embedding for search query
-        response = client.embeddings.create(
+        # Convert search query to embedding vector
+        embedding_response = client.embeddings.create(
             input=request.query,
-            model="text-embedding-ada-002"
+            model=EMBEDDING_MODEL
         )
-        query_embedding = response.data[0].embedding
+        query_embedding = embedding_response.data[0].embedding
         
         # Search using vector similarity
         # Note: This uses Supabase's vector search

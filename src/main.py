@@ -59,7 +59,7 @@ def clean_text(text: str) -> str:
     
     return text.strip()
 
-def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[str]:
+def chunk_text_fn(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[str]:
     """
     Split text into overlapping chunks for embedding generation.
     
@@ -76,12 +76,13 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[st
         list[str]: List of text chunks with specified overlap
         
     Example:
-        >>> chunks = chunk_text("Long text here...", chunk_size=100, overlap=20)
+        >>> chunks = chunk_text_fn("Long text here...", chunk_size=100, overlap=20)
         >>> len(chunks[0])  # First chunk
         100
         >>> chunks[0][-20:] == chunks[1][:20]  # Overlap check
         True
     """
+    print("Entered chunk_text_fn function")
     # Clean the text first to ensure consistent processing
     cleaned_text = clean_text(text)
     
@@ -101,7 +102,7 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[st
         start_position += chunk_size - overlap
         
         # Prevent infinite loop if overlap >= chunk_size
-        if start_position <= start_position - (chunk_size - overlap):
+        if chunk_size <= overlap:
             break
     
     return chunks
@@ -352,8 +353,14 @@ async def process_article(article_id: str, background_tasks: BackgroundTasks):
         
         article = result.data[0]
         
+        # Only block if already fully processed (allow reprocessing of failed articles)
         if article['processing_status'] == 'fully_processed':
             raise HTTPException(status_code=400, detail="Article already fully processed")
+        
+        # If article previously failed, clean up any partial chunks before reprocessing
+        if article['processing_status'] == 'failed':
+            print(f"Cleaning up failed processing for article {article_id}")
+            supabase.table('article_chunks').delete().eq('article_id', article_id).execute()
         
         # Add processing task to background
         background_tasks.add_task(process_article_background, article_id, article)
@@ -438,8 +445,13 @@ async def process_article_background(article_id: str, article: dict):
         cleaned_text = clean_text(extracted_text)
         
         # Step 4: Split text into overlapping chunks for embedding
-        text_chunks = chunk_text(cleaned_text, chunk_size=DEFAULT_CHUNK_SIZE, overlap=DEFAULT_CHUNK_OVERLAP)
+        print("About to call chunk_text_fn function")
+        text_chunks = chunk_text_fn(cleaned_text, chunk_size=DEFAULT_CHUNK_SIZE, overlap=DEFAULT_CHUNK_OVERLAP)
         print(f"Created {len(text_chunks)} text chunks")
+        
+        # Check if we have any chunks to process
+        if not text_chunks:
+            raise Exception("No text chunks were created after processing")
         
         # Step 5: Generate embeddings for each chunk using OpenAI
         embedding_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
@@ -703,3 +715,58 @@ async def delete_article_chunks(article_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete chunks: {str(e)}")
+
+@app.post("/articles/{article_id}/reset")
+async def reset_article_processing(article_id: str):
+    """
+    Reset a failed article back to metadata_only status and clear any partial chunks.
+    
+    This endpoint allows recovery from processing failures by:
+    1. Deleting any partial chunks that may have been created
+    2. Resetting the processing status to 'metadata_only'
+    3. Enabling the article to be reprocessed
+    
+    Args:
+        article_id (str): ID of the article to reset
+        
+    Returns:
+        dict: Success message with article ID
+        
+    Raises:
+        HTTPException: 404 if article not found
+        HTTPException: 400 if article is not in a failed state
+        HTTPException: 500 if database operation fails
+    """
+    try:
+        # Check if article exists and is in failed state
+        result = supabase.table('articles').select('*').eq('id', article_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Article not found")
+        
+        article = result.data[0]
+        
+        if article['processing_status'] not in ['failed', 'processing']:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Article is not in a resetable state. Current status: {article['processing_status']}"
+            )
+        
+        # Delete any partial chunks that may have been created during failed processing
+        supabase.table('article_chunks').delete().eq('article_id', article_id).execute()
+        
+        # Reset article status to metadata_only
+        supabase.table('articles').update({
+            'processing_status': 'metadata_only'
+        }).eq('id', article_id).execute()
+        
+        return {
+            "message": "Article processing status reset successfully",
+            "article_id": article_id,
+            "new_status": "metadata_only"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reset article: {str(e)}")

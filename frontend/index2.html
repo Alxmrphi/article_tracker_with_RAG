@@ -433,7 +433,7 @@
                     ? 'Metadata' 
                     : paper.processing_status === 'fully_processed'
                     ? 'Processed'
-                    : paper.processing_status === 'processing'
+                    : paper.processing_status === 'processing' 
                     ? 'Processing'
                     : 'Failed';
                 
@@ -447,6 +447,11 @@
                     `;
                 } else if (paper.processing_status === 'processing') {
                     actionButtons = '<span style="color: #1e40af; font-weight: 500;">⏳ Processing...</span>';
+                } else if (paper.processing_status === 'failed') {
+                    actionButtons = `
+                        <button class="btn btn-danger" onclick="resetFailedPaper('${paper.id}')">🔄 Reset</button>
+                        <span style="color: #991b1b; font-size: 0.85em; margin-left: 10px;">Processing failed - click reset to retry</span>
+                    `;
                 }
                 
                 card.innerHTML = `
@@ -508,6 +513,25 @@
                 list.appendChild(tag);
             });
         }
+
+        async function resetFailedPaper(paperId) {
+        if (!confirm('Reset this failed paper? This will clear any partial data and allow reprocessing.')) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`${API_BASE}/articles/${paperId}/reset`, {
+                method: 'POST'
+            });
+            
+            if (!response.ok) throw new Error('Failed to reset paper');
+            
+            alert('Paper reset successfully! You can now try processing it again.');
+            loadPapers();
+        } catch (error) {
+            alert(`Error: ${error.message}`);
+        }
+    }
 
         async function processPaper(paperId) {
             if (!confirm('Process this paper? This will download and analyze the full PDF.')) {

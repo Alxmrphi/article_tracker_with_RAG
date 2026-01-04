@@ -318,8 +318,9 @@ Please ensure any contributions include appropriate tests and documentation.
 
 ## 📄 License
 
-[Add your license information here]
+TODO: last step
 
 ---
 
 **Note**: This project was initially focused on NeuroAI research but is designed to be domain-agnostic. The keyword tracking and semantic search capabilities make it suitable for any research field.
+

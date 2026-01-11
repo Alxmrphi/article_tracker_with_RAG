@@ -1,0 +1,54 @@
+name: Broad Paper Collection
+
+on:
+  schedule:
+    # Run every 3 days at 3 AM UTC
+    - cron: '0 3 */3 * *'
+  workflow_dispatch:  # Allow manual triggering
+    inputs:
+      max_papers:
+        description: 'Maximum number of papers to fetch'
+        required: false
+        default: '100'
+      threshold:
+        description: 'Similarity threshold (0.0-1.0)'
+        required: false
+        default: '0.7'
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  broad-collection:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run broad paper collection
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          uv run python scripts/discover_papers.py \
+            --categories cs.AI cs.LG cs.CL cs.CV cs.NE stat.ML q-bio.NC cs.RO \
+            --threshold ${{ github.event.inputs.threshold || '0.7' }} \
+            --max-papers ${{ github.event.inputs.max_papers || '100' }}
+
+      - name: Summary
+        run: echo "Broad paper collection completed successfully at $(date)"

@@ -39,3 +39,44 @@ class KeywordResponse(BaseModel): # Same here
     active: bool
     created_at: datetime
     last_checked: Optional[datetime]
+
+
+# RAG Query Models
+class RAGQueryRequest(BaseModel):
+    """Request model for RAG queries"""
+    question: str
+    max_chunks: int = 5  # Maximum number of chunks to retrieve for context
+    similarity_threshold: float = 0.7  # Minimum similarity score for chunks
+
+
+class RAGSourceChunk(BaseModel):
+    """A source chunk used in RAG response"""
+    article_id: str
+    article_title: str
+    chunk_text: str
+    similarity_score: float
+
+
+class RAGQueryResponse(BaseModel):
+    """Response model for RAG queries"""
+    question: str
+    answer: str
+    sources: List[RAGSourceChunk]
+    chunks_used: int
+
+
+# Keyword Matching Models
+class KeywordMatchResult(BaseModel):
+    """Result of matching a paper against tracked keywords"""
+    keyword_id: str
+    keyword: str
+    similarity_score: float
+
+
+class PaperMatchResult(BaseModel):
+    """Paper with its keyword match scores"""
+    arxiv_id: str
+    title: str
+    abstract: str
+    matching_keywords: List[KeywordMatchResult]
+    best_match_score: float

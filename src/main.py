@@ -12,7 +12,12 @@ import requests
 from io import BytesIO
 
 from .database import supabase
-from .models import Article, ArticleChunk, SearchRequest, SearchResult, KeywordCreate, KeywordResponse
+from .models import (
+    Article, ArticleChunk, SearchRequest, SearchResult,
+    KeywordCreate, KeywordResponse,
+    RAGQueryRequest, RAGQueryResponse, RAGSourceChunk,
+    KeywordMatchResult, PaperMatchResult
+)
 
 app = FastAPI(
     title="Research Paper Tracker API",
@@ -112,6 +117,8 @@ DEFAULT_CHUNK_SIZE = 1000
 DEFAULT_CHUNK_OVERLAP = 200
 EMBEDDING_MODEL = "text-embedding-ada-002"
 PDF_DOWNLOAD_TIMEOUT = 30
+LLM_MODEL = "gpt-4o-mini"  # Cost-effective model for RAG queries
+RAG_MAX_CONTEXT_CHARS = 12000  # Maximum characters of context to send to LLM
 
 # TODO: should have more optionality here to pick embedding model
 # OpenAI client - initialized once for efficiency
@@ -211,8 +218,9 @@ async def root():
         "description": "Track and analyze research papers with semantic search capabilities",
         "endpoints": {
             "health": "/health - API health check",
-            "articles": "/articles - List and manage research articles", 
+            "articles": "/articles - List and manage research articles",
             "search": "/search - Semantic search across paper content",
+            "query": "/query - Ask questions using RAG (LLM-powered answers)",
             "keywords": "/keywords - Manage tracked keywords",
             "stats": "/stats - System statistics"
         },
@@ -538,6 +546,165 @@ async def semantic_search(request: SearchRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ==========================================
+# RAG QUERY ENDPOINT
+# ==========================================
+
+@app.post("/query", response_model=RAGQueryResponse)
+async def rag_query(request: RAGQueryRequest):
+    """
+    Ask questions about your research paper collection using RAG.
+
+    This endpoint implements Retrieval Augmented Generation (RAG):
+    1. Converts the question to an embedding
+    2. Retrieves semantically similar chunks from processed papers
+    3. Sends the question + context to an LLM
+    4. Returns the answer with source citations
+
+    Args:
+        request (RAGQueryRequest): Contains:
+            - question: The question to ask about the research papers
+            - max_chunks: Maximum number of chunks to use as context (default: 5)
+            - similarity_threshold: Minimum similarity score (default: 0.7)
+
+    Returns:
+        RAGQueryResponse: Contains:
+            - question: The original question
+            - answer: LLM-generated answer based on paper content
+            - sources: List of source chunks used with article info
+            - chunks_used: Number of chunks used for context
+
+    Raises:
+        HTTPException: 400 if question is empty
+        HTTPException: 404 if no relevant chunks found
+        HTTPException: 500 if LLM query fails
+
+    Example:
+        POST /query
+        {
+            "question": "What are the main approaches for attention mechanisms in transformers?",
+            "max_chunks": 5
+        }
+    """
+    # Validate question
+    if not request.question or not request.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+
+    try:
+        # Step 1: Generate embedding for the question
+        question_embedding = get_embedding_for_text(request.question)
+
+        # Step 2: Retrieve relevant chunks using vector similarity
+        chunks_result = supabase.rpc(
+            'match_chunks',
+            {
+                'query_embedding': question_embedding,
+                'match_threshold': request.similarity_threshold,
+                'match_count': request.max_chunks
+            }
+        ).execute()
+
+        if not chunks_result.data:
+            raise HTTPException(
+                status_code=404,
+                detail="No relevant content found in processed papers. Try processing more papers or adjusting your question."
+            )
+
+        # Step 3: Build context from retrieved chunks
+        # Get article details for each chunk
+        sources = []
+        context_parts = []
+        total_chars = 0
+
+        for chunk_data in chunks_result.data:
+            # Get article title
+            article_result = supabase.table('articles')\
+                .select('title')\
+                .eq('id', chunk_data['article_id'])\
+                .execute()
+
+            article_title = article_result.data[0]['title'] if article_result.data else "Unknown Article"
+
+            chunk_text = chunk_data['chunk_text']
+            similarity = chunk_data['similarity']
+
+            # Check if adding this chunk would exceed context limit
+            if total_chars + len(chunk_text) > RAG_MAX_CONTEXT_CHARS:
+                break
+
+            total_chars += len(chunk_text)
+
+            # Add to context
+            context_parts.append(f"[From: {article_title}]\n{chunk_text}")
+
+            # Add to sources
+            sources.append(RAGSourceChunk(
+                article_id=chunk_data['article_id'],
+                article_title=article_title,
+                chunk_text=chunk_text[:500] + "..." if len(chunk_text) > 500 else chunk_text,
+                similarity_score=round(similarity, 4)
+            ))
+
+        if not context_parts:
+            raise HTTPException(
+                status_code=404,
+                detail="No relevant content found after filtering."
+            )
+
+        # Step 4: Build the prompt for the LLM
+        context = "\n\n---\n\n".join(context_parts)
+
+        system_prompt = """You are a helpful research assistant that answers questions based on academic paper content.
+Your answers should be:
+- Based ONLY on the provided context from research papers
+- Clear and concise
+- Technical when appropriate
+- Honest about uncertainty - if the context doesn't fully answer the question, say so
+
+If the context doesn't contain relevant information to answer the question, say "I cannot find relevant information in the processed papers to answer this question."
+
+Always synthesize information from multiple sources when available."""
+
+        user_prompt = f"""Based on the following excerpts from research papers, please answer this question:
+
+Question: {request.question}
+
+Context from papers:
+{context}
+
+Please provide a clear, well-structured answer based on the above context."""
+
+        # Step 5: Query the LLM
+        llm_response = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3,  # Lower temperature for more factual responses
+            max_tokens=1000
+        )
+
+        answer = llm_response.choices[0].message.content
+
+        # Step 6: Return the response
+        return RAGQueryResponse(
+            question=request.question,
+            answer=answer,
+            sources=sources,
+            chunks_used=len(sources)
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process query: {str(e)}"
+        )
+
+
 @app.get("/stats")
 async def get_stats():
     """
@@ -675,16 +842,209 @@ async def delete_keyword(keyword_id: str):
     """Delete a tracked keyword"""
     try:
         result = supabase.table('tracked_keywords').delete().eq('id', keyword_id).execute()
-        
+
         if not result.data:
             raise HTTPException(status_code=404, detail="Keyword not found")
-        
+
         return {"message": "Keyword deleted successfully"}
-    
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete keyword: {str(e)}")
+
+
+# ==========================================
+# KEYWORD MATCHING ENDPOINTS
+# ==========================================
+
+def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+    """
+    Calculate cosine similarity between two vectors.
+
+    Args:
+        vec1: First embedding vector
+        vec2: Second embedding vector
+
+    Returns:
+        float: Cosine similarity score between 0 and 1
+    """
+    import math
+
+    dot_product = sum(a * b for a, b in zip(vec1, vec2))
+    norm1 = math.sqrt(sum(a * a for a in vec1))
+    norm2 = math.sqrt(sum(b * b for b in vec2))
+
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+
+    return dot_product / (norm1 * norm2)
+
+
+@app.post("/keywords/match-paper/{article_id}", response_model=List[KeywordMatchResult])
+async def match_paper_against_keywords(
+    article_id: str,
+    threshold: float = 0.7
+):
+    """
+    Check how well a paper matches against all tracked keywords.
+
+    This endpoint compares a paper's abstract embedding against all
+    tracked keyword embeddings and returns matches above the threshold.
+
+    Args:
+        article_id: ID of the article to match
+        threshold: Minimum similarity score to consider a match (default: 0.7)
+
+    Returns:
+        List[KeywordMatchResult]: Keywords that match the paper, sorted by score
+
+    Raises:
+        HTTPException: 404 if article not found
+        HTTPException: 400 if article has no abstract
+    """
+    try:
+        # Get the article
+        article_result = supabase.table('articles')\
+            .select('id, title, abstract')\
+            .eq('id', article_id)\
+            .execute()
+
+        if not article_result.data:
+            raise HTTPException(status_code=404, detail="Article not found")
+
+        article = article_result.data[0]
+
+        if not article.get('abstract'):
+            raise HTTPException(status_code=400, detail="Article has no abstract to match against")
+
+        # Generate embedding for the abstract
+        abstract_embedding = get_embedding_for_text(article['abstract'])
+
+        # Get all active keywords with embeddings
+        keywords_result = supabase.table('tracked_keywords')\
+            .select('id, keyword, embedding')\
+            .eq('active', True)\
+            .execute()
+
+        if not keywords_result.data:
+            return []
+
+        # Calculate similarity for each keyword
+        matches = []
+        for kw in keywords_result.data:
+            if not kw.get('embedding'):
+                continue
+
+            similarity = cosine_similarity(abstract_embedding, kw['embedding'])
+
+            if similarity >= threshold:
+                matches.append(KeywordMatchResult(
+                    keyword_id=kw['id'],
+                    keyword=kw['keyword'],
+                    similarity_score=round(similarity, 4)
+                ))
+
+        # Sort by similarity score descending
+        matches.sort(key=lambda x: x.similarity_score, reverse=True)
+
+        return matches
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to match paper: {str(e)}")
+
+
+@app.get("/keywords/discover", response_model=List[PaperMatchResult])
+async def discover_matching_papers(
+    threshold: float = 0.75,
+    limit: int = 20
+):
+    """
+    Discover papers that match any tracked keyword.
+
+    This endpoint finds papers whose abstracts are semantically similar
+    to the tracked keywords. Useful for automated paper discovery.
+
+    Args:
+        threshold: Minimum similarity score to consider a match (default: 0.75)
+        limit: Maximum number of papers to return (default: 20)
+
+    Returns:
+        List[PaperMatchResult]: Papers with their matching keywords, sorted by best match
+    """
+    try:
+        # Get all active keywords with embeddings
+        keywords_result = supabase.table('tracked_keywords')\
+            .select('id, keyword, embedding')\
+            .eq('active', True)\
+            .execute()
+
+        if not keywords_result.data:
+            return []
+
+        # Get all articles with abstracts
+        articles_result = supabase.table('articles')\
+            .select('id, arxiv_id, title, abstract')\
+            .not_.is_('abstract', 'null')\
+            .execute()
+
+        if not articles_result.data:
+            return []
+
+        # Match each article against all keywords
+        paper_matches = []
+
+        for article in articles_result.data:
+            if not article.get('abstract'):
+                continue
+
+            # Generate embedding for abstract
+            abstract_embedding = get_embedding_for_text(article['abstract'])
+
+            # Find matching keywords
+            matching_keywords = []
+            best_score = 0.0
+
+            for kw in keywords_result.data:
+                if not kw.get('embedding'):
+                    continue
+
+                similarity = cosine_similarity(abstract_embedding, kw['embedding'])
+
+                if similarity >= threshold:
+                    matching_keywords.append(KeywordMatchResult(
+                        keyword_id=kw['id'],
+                        keyword=kw['keyword'],
+                        similarity_score=round(similarity, 4)
+                    ))
+                    best_score = max(best_score, similarity)
+
+            # Only include papers that matched at least one keyword
+            if matching_keywords:
+                matching_keywords.sort(key=lambda x: x.similarity_score, reverse=True)
+                paper_matches.append(PaperMatchResult(
+                    arxiv_id=article['arxiv_id'],
+                    title=article['title'],
+                    abstract=article['abstract'][:500] + "..." if len(article['abstract']) > 500 else article['abstract'],
+                    matching_keywords=matching_keywords,
+                    best_match_score=round(best_score, 4)
+                ))
+
+        # Sort by best match score and limit
+        paper_matches.sort(key=lambda x: x.best_match_score, reverse=True)
+
+        # Update last_checked timestamp for all keywords
+        supabase.table('tracked_keywords')\
+            .update({'last_checked': datetime.utcnow().isoformat()})\
+            .eq('active', True)\
+            .execute()
+
+        return paper_matches[:limit]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to discover papers: {str(e)}")
 
 
 # ==========================================

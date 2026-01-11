@@ -314,6 +314,89 @@
             margin-bottom: 15px;
         }
 
+        /* Query Section Styles */
+        .query-section {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .query-section textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 0.9em;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 80px;
+            transition: border-color 0.2s;
+        }
+
+        .query-section textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .query-result {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 2px solid #f0f0f0;
+        }
+
+        .query-result h3 {
+            font-size: 0.9em;
+            color: #667eea;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .answer-section {
+            margin-bottom: 20px;
+        }
+
+        #query-answer {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            line-height: 1.6;
+            font-size: 0.95em;
+            color: #333;
+            white-space: pre-wrap;
+        }
+
+        .sources-section {
+            margin-top: 15px;
+        }
+
+        .source-item {
+            background: linear-gradient(135deg, #667eea10 0%, #764ba210 100%);
+            border: 1px solid #667eea20;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            font-size: 0.85em;
+        }
+
+        .source-title {
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .source-score {
+            font-size: 0.8em;
+            color: #666;
+            margin-bottom: 8px;
+        }
+
+        .source-text {
+            color: #555;
+            line-height: 1.5;
+            font-size: 0.9em;
+        }
+
         /* Scrollbar styling */
         ::-webkit-scrollbar {
             width: 8px;
@@ -356,6 +439,26 @@
 
         <div class="main-content">
             <div class="sidebar">
+                <!-- RAG Query Section -->
+                <div class="card">
+                    <h2>🤖 Ask Your Papers</h2>
+                    <div class="query-section">
+                        <textarea id="query-input" placeholder="Ask a question about your research papers..." rows="3"></textarea>
+                        <button class="btn btn-primary" onclick="askQuestion()" id="ask-btn">Ask Question</button>
+                    </div>
+                    <div id="query-loading" class="loading" style="display: none;">Thinking</div>
+                    <div id="query-result" class="query-result" style="display: none;">
+                        <div class="answer-section">
+                            <h3>Answer</h3>
+                            <div id="query-answer"></div>
+                        </div>
+                        <div class="sources-section">
+                            <h3>Sources</h3>
+                            <div id="query-sources"></div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="card">
                     <h2>🏷️ Tracked Keywords</h2>
                     <div id="keywords-error" class="error" style="display: none;"></div>
@@ -640,6 +743,96 @@
                 alert(`Error: ${error.message}`);
             }
         }
+
+        // RAG Query Functions
+        async function askQuestion() {
+            const input = document.getElementById('query-input');
+            const question = input.value.trim();
+
+            if (!question) {
+                alert('Please enter a question');
+                return;
+            }
+
+            const askBtn = document.getElementById('ask-btn');
+            const loadingDiv = document.getElementById('query-loading');
+            const resultDiv = document.getElementById('query-result');
+
+            // Show loading state
+            askBtn.disabled = true;
+            askBtn.textContent = 'Asking...';
+            loadingDiv.style.display = 'block';
+            resultDiv.style.display = 'none';
+
+            try {
+                const response = await fetch(`${API_BASE}/query`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        question: question,
+                        max_chunks: 5
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to get answer');
+                }
+
+                const data = await response.json();
+                displayQueryResult(data);
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+                resultDiv.style.display = 'none';
+            } finally {
+                askBtn.disabled = false;
+                askBtn.textContent = 'Ask Question';
+                loadingDiv.style.display = 'none';
+            }
+        }
+
+        function displayQueryResult(data) {
+            const resultDiv = document.getElementById('query-result');
+            const answerDiv = document.getElementById('query-answer');
+            const sourcesDiv = document.getElementById('query-sources');
+
+            // Display answer
+            answerDiv.textContent = data.answer;
+
+            // Display sources
+            sourcesDiv.innerHTML = '';
+            if (data.sources && data.sources.length > 0) {
+                data.sources.forEach(source => {
+                    const sourceEl = document.createElement('div');
+                    sourceEl.className = 'source-item';
+                    sourceEl.innerHTML = `
+                        <div class="source-title">${source.article_title}</div>
+                        <div class="source-score">Relevance: ${(source.similarity_score * 100).toFixed(1)}%</div>
+                        <div class="source-text">${source.chunk_text}</div>
+                    `;
+                    sourcesDiv.appendChild(sourceEl);
+                });
+            } else {
+                sourcesDiv.innerHTML = '<div class="empty-state" style="padding: 10px;">No sources available</div>';
+            }
+
+            resultDiv.style.display = 'block';
+        }
+
+        // Allow Enter key to submit query (Shift+Enter for new line)
+        document.addEventListener('DOMContentLoaded', () => {
+            const queryInput = document.getElementById('query-input');
+            if (queryInput) {
+                queryInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        askQuestion();
+                    }
+                });
+            }
+        });
 
         window.onload = () => {
             loadPapers();

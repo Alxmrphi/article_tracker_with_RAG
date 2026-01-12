@@ -9,7 +9,7 @@ on:
       max_papers:
         description: 'Maximum number of papers to fetch'
         required: false
-        default: '100'
+        default: '7'
       threshold:
         description: 'Similarity threshold (0.0-1.0)'
         required: false

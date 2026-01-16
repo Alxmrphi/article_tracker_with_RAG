@@ -267,7 +267,8 @@ def run_discovery(categories: List[str] = None):
 
         if matches:
             print(f"\nMatched: {paper['title'][:80]}...")
-            print(f"  Keywords: {', '.join([f\"{m['keyword']} ({m['similarity']:.2f})\" for m in matches[:3]])}")
+            keyword_strs = [f"{m['keyword']} ({m['similarity']:.2f})" for m in matches[:3]]
+            print(f"  Keywords: {', '.join(keyword_strs)}")
 
             if add_paper_to_database(paper):
                 added_count += 1

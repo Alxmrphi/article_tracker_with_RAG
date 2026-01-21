@@ -177,7 +177,12 @@ def match_paper_to_keywords(paper: Dict, keywords: List[Dict]) -> List[Dict]:
         if not kw.get('embedding'):
             continue
 
-        similarity = cosine_similarity(abstract_embedding, kw['embedding'])
+        embedding = kw['embedding']
+        if isinstance(embedding, str):
+            embedding = json.loads(embedding)
+
+
+        similarity = cosine_similarity(abstract_embedding, embedding)
 
         if similarity >= MATCH_THRESHOLD:
             matches.append({

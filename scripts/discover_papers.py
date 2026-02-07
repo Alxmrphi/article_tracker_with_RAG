@@ -7,6 +7,7 @@ tracked keywords using semantic similarity, and adds matching papers
 to the database.
 """
 
+import json
 import os
 import sys
 import math

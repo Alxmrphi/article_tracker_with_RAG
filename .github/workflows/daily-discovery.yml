@@ -39,7 +39,7 @@ jobs:
           uv run python scripts/discover_papers.py \
             --categories cs.AI cs.LG cs.CL cs.CV cs.NE stat.ML \
             --threshold 0.75 \
-            --max-papers 5
+            --max-papers 50
 
       - name: Summary
         run: echo "Paper discovery completed successfully at $(date)"

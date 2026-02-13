@@ -5,6 +5,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 from datetime import datetime
 
+import json
 import re
 import os
 import uuid
@@ -936,7 +937,11 @@ async def match_paper_against_keywords(
             if not kw.get('embedding'):
                 continue
 
-            similarity = cosine_similarity(abstract_embedding, kw['embedding'])
+            embedding = kw['embedding']
+            if isinstance(embedding, str):
+                embedding = json.loads(embedding)
+
+            similarity = cosine_similarity(abstract_embedding, embedding)
 
             if similarity >= threshold:
                 matches.append(KeywordMatchResult(
@@ -1011,7 +1016,11 @@ async def discover_matching_papers(
                 if not kw.get('embedding'):
                     continue
 
-                similarity = cosine_similarity(abstract_embedding, kw['embedding'])
+                embedding = kw['embedding']
+                if isinstance(embedding, str):
+                    embedding = json.loads(embedding)
+
+                similarity = cosine_similarity(abstract_embedding, embedding)
 
                 if similarity >= threshold:
                     matching_keywords.append(KeywordMatchResult(

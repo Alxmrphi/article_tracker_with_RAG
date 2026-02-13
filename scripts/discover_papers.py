@@ -14,7 +14,7 @@ import math
 import uuid
 import requests
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from dotenv import load_dotenv
 
@@ -215,7 +215,7 @@ def add_paper_to_database(paper: Dict) -> bool:
             'pdf_url': paper['pdf_url'],
             'published_date': paper['published_date'],
             'processing_status': 'metadata_only',
-            'created_at': datetime.utcnow().isoformat()
+            'created_at': datetime.now(timezone.utc).isoformat()
         }).execute()
 
         return True
@@ -227,7 +227,7 @@ def add_paper_to_database(paper: Dict) -> bool:
 def update_keywords_last_checked():
     """Update the last_checked timestamp for all active keywords."""
     supabase.table('tracked_keywords')\
-        .update({'last_checked': datetime.utcnow().isoformat()})\
+        .update({'last_checked': datetime.now(timezone.utc).isoformat()})\
         .eq('active', True)\
         .execute()
 
@@ -243,7 +243,7 @@ def run_discovery(categories: List[str] = None):
         # Default AI/ML categories
         categories = ['cs.AI', 'cs.LG', 'cs.CL', 'cs.CV', 'cs.NE', 'stat.ML']
 
-    print(f"Starting paper discovery at {datetime.utcnow().isoformat()}")
+    print(f"Starting paper discovery at {datetime.now(timezone.utc).isoformat()}")
     print(f"Categories: {categories}")
     print(f"Match threshold: {MATCH_THRESHOLD}")
 

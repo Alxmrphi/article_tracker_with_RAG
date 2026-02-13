@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from openai import OpenAI
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timezone
 
 import json
 import re
@@ -260,7 +260,7 @@ async def health_check():
             "status": "healthy",
             "database": "connected",
             "articles_count": len(result.data),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         raise HTTPException(
@@ -479,7 +479,7 @@ async def process_article_background(article_id: str, article: dict):
                 'chunk_text': chunk_text,
                 'chunk_index': chunk_index,
                 'embedding': chunk_embedding,
-                'created_at': datetime.utcnow().isoformat()
+                'created_at': datetime.now(timezone.utc).isoformat()
             }).execute()
         
         # Step 7: Mark article as fully processed
@@ -749,7 +749,7 @@ async def get_stats():
             "total_chunks": chunks_result.count if chunks_result.count else 0,
             "tracked_keywords": keywords_result.count if keywords_result.count else 0,
             "processing_success_rate": round(success_rate, 1),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -823,7 +823,7 @@ async def add_keyword(keyword_data: KeywordCreate):
             'keyword': keyword_text,
             'embedding': keyword_embedding,
             'active': True,
-            'created_at': datetime.utcnow().isoformat(),
+            'created_at': datetime.now(timezone.utc).isoformat(),
             'last_checked': None
         }).execute()
         
@@ -1046,7 +1046,7 @@ async def discover_matching_papers(
 
         # Update last_checked timestamp for all keywords
         supabase.table('tracked_keywords')\
-            .update({'last_checked': datetime.utcnow().isoformat()})\
+            .update({'last_checked': datetime.now(timezone.utc).isoformat()})\
             .eq('active', True)\
             .execute()
 

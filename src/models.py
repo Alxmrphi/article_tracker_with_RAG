@@ -26,9 +26,9 @@ class SearchRequest(BaseModel):
     limit: int = 10
 
 class SearchResult(BaseModel):
-    article: Article
-    similarity_score: float
-    matching_chunk: str
+    article_id: str
+    chunk_text: str
+    similarity: float
 
 class KeywordCreate(BaseModel):
     keyword: str # TODO: phrase, not keyword
